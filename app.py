@@ -19,7 +19,14 @@ from routes.auth import auth_bp
 
 def create_app():
     app = Flask(__name__)
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    
+    # Enable CORS for the entire application
+    # This configuration specifically white-lists your Netlify domain and common methods/headers
+    CORS(app, resources={r"/api/*": {
+        "origins": ["https://aibillgeneratorapp.netlify.app", "http://localhost:3000"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }})
 
     # Initialize database
     init_db()
