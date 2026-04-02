@@ -20,27 +20,41 @@ DB_PASS = os.getenv("DB_PASS", "")
 
 def get_connection():
     """Return a PostgreSQL connection."""
-    # Priority 1: External Connection String (for Render)
-    # Render provides DATABASE_URL, while we also support DB_URL
-    DB_URL = os.getenv("DATABASE_URL") or os.getenv("DB_URL")
-
-    if DB_URL:
-        # Append sslmode=require for Render if not present
-        if "sslmode=" not in DB_URL:
-            separator = "&" if "?" in DB_URL else "?"
-            DB_URL += f"{separator}sslmode=require"
-        
-        return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+    # Priority 1: External Connection String (for Render/Heroku)
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_URL")
     
-    return psycopg2.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        database=DB_NAME,
-        user=DB_USER,
-        password=DB_PASS,
-        sslmode="require",
-        cursor_factory=RealDictCursor
-    )
+    if db_url:
+        # Append sslmode if not present in the URL
+        if "sslmode=" not in db_url:
+            separator = "&" if "?" in db_url else "?"
+            # Default to 'require' for remote URLs unless it's localhost
+            mode = "require" if "localhost" not in db_url and "127.0.0.1" not in db_url else "disable"
+            db_url += f"{separator}sslmode={mode}"
+        
+        try:
+            return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+        except Exception as e:
+            print(f"[DB] Error connecting via DB_URL: {e}")
+            # If URL fails, fall back to individual parameters below
+    
+    # Priority 2: Individual Parameters
+    ssl_mode = os.getenv("DB_SSL", "require")
+    if DB_HOST in ["localhost", "127.0.0.1", "::1"]:
+        ssl_mode = "disable"
+
+    try:
+        return psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            sslmode=ssl_mode,
+            cursor_factory=RealDictCursor
+        )
+    except Exception as e:
+        print(f"[DB] Error connecting via parameters: {e}")
+        raise e
 
 def init_db():
     """Initialize PostgreSQL tables and seed sample employees."""

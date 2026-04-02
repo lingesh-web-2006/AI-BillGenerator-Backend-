@@ -3,6 +3,12 @@ Employee Billing System - Flask Backend
 Main application entry point
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables before importing routes
+load_dotenv()
+
 from flask import Flask
 from flask_cors import CORS
 from database import init_db
