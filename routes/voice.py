@@ -15,10 +15,13 @@ voice_bp = Blueprint("voice", __name__)
 
 # Initialize Groq client
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
+client = None
+
+if GROQ_API_KEY:
+    client = Groq(api_key=GROQ_API_KEY)
+else:
     import warnings
-    warnings.warn("GROQ_API_KEY is not set. Voice AI features will not work.")
-client = Groq(api_key=GROQ_API_KEY)
+    warnings.warn("GROQ_API_KEY is not set. Voice AI features will be disabled.")
 
 SYSTEM_PROMPT = """You are an AI assistant for a Payroll & Employee Billing System.
 Your job is to understand user commands and convert them into structured JSON actions.
@@ -106,6 +109,9 @@ def process_voice_command():
     emp_names = [row["name"] for row in cur.fetchall()]
     cur.close()
     conn.close()
+
+    if not client:
+        return jsonify({"error": "Voice AI features are currently disabled. Please contact the administrator to set the GROQ_API_KEY environment variable."}), 503
 
     try:
         response = client.chat.completions.create(
