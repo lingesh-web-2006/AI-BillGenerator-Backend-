@@ -20,16 +20,17 @@ DB_PASS = os.getenv("DB_PASS", "")
 
 def get_connection():
     """Return a PostgreSQL connection."""
+    # Priority 1: External Connection String (for Render)
+    # Render provides DATABASE_URL, while we also support DB_URL
+    DB_URL = os.getenv("DATABASE_URL") or os.getenv("DB_URL")
+
     if DB_URL:
-        # For Render URLs, psycopg2 connects directly using the string.
-        # Adding sslmode=require as it is typically required for Render.
-        if "sslmode" not in DB_URL:
-            # Append if not there
-            sep = "&" if "?" in DB_URL else "?"
-            url = f"{DB_URL}{sep}sslmode=require"
-        else:
-            url = DB_URL
-        return psycopg2.connect(url, cursor_factory=RealDictCursor)
+        # Append sslmode=require for Render if not present
+        if "sslmode=" not in DB_URL:
+            separator = "&" if "?" in DB_URL else "?"
+            DB_URL += f"{separator}sslmode=require"
+        
+        return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
     
     return psycopg2.connect(
         host=DB_HOST,
