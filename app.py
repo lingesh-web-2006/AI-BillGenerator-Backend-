@@ -13,7 +13,7 @@ from routes.auth import auth_bp
 
 def create_app():
     app = Flask(__name__)
-    CORS(app, origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"])
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
 
     # Initialize database
     init_db()
