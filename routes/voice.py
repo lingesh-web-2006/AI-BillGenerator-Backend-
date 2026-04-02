@@ -16,7 +16,8 @@ voice_bp = Blueprint("voice", __name__)
 # Initialize Groq client
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
-    raise ValueError("WARNING: GROQ_API_KEY environment variable is missing. Voice features will fail.")
+    import warnings
+    warnings.warn("GROQ_API_KEY is not set. Voice AI features will not work.")
 client = Groq(api_key=GROQ_API_KEY)
 
 SYSTEM_PROMPT = """You are an AI assistant for a Payroll & Employee Billing System.
@@ -158,14 +159,28 @@ def handle_generate_bill(parsed, voice_text):
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT INTO bill (employee_id, amount, working_days, present_days,
-                              absent_days, deduction, notes, bill_date)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """, (emp["id"], bill_data["net_amount"], bill_data["working_days"],
+            INSERT INTO bill (employee_id, employee_name, amount, working_days, present_days,
+                              absent_days, deduction, notes, bill_date, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+            RETURNING id, generated_at
+        """, (emp["id"], emp["name"], bill_data["net_amount"], bill_data["working_days"],
               bill_data["present_days"], bill_data["absent_days"], 
               bill_data["deduction"], bill_data["notes"], bill_date))
-        bill_id = cur.fetchone()["id"]
+        result = cur.fetchone()
+        bill_id = result["id"]
+        generated_at = result["generated_at"]
+
+        # --- Automatic Transaction Logging ---
+        cur.execute("""
+            INSERT INTO transaction_log (bill_id, amount, payment_method, transaction_ref)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            bill_id,
+            bill_data["net_amount"],
+            "Voice Command Automation",
+            f"VOICE-{bill_id}-{int(generated_at.timestamp())}"
+        ))
+
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -179,6 +194,7 @@ def handle_generate_bill(parsed, voice_text):
     return jsonify({
         **bill_data,
         "bill_id": bill_id,
+        "generated_at": generated_at,
         "parsed_command": parsed,
         "voice_text": voice_text,
         "type": "bill"
@@ -203,12 +219,29 @@ def handle_generate_bulk(parsed, voice_text):
             bill_data["net_amount"] += bonus
             
             cur.execute("""
-                INSERT INTO bill (employee_id, amount, working_days, present_days,
-                                  absent_days, deduction, notes, bill_date)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (emp["id"], bill_data["net_amount"], bill_data["working_days"],
+                INSERT INTO bill (employee_id, employee_name, amount, working_days, present_days,
+                                  absent_days, deduction, notes, bill_date, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+                RETURNING id, generated_at
+            """, (emp["id"], emp["name"], bill_data["net_amount"], bill_data["working_days"],
                   bill_data["present_days"], bill_data["absent_days"], 
                   bill_data["deduction"], f"Bulk generation. Bonus: {bonus}", bill_date))
+            
+            res = cur.fetchone()
+            bill_id = res["id"]
+            generated_at = res["generated_at"]
+
+            # --- Automatic Transaction Logging for each bulk slip ---
+            cur.execute("""
+                INSERT INTO transaction_log (bill_id, amount, payment_method, transaction_ref)
+                VALUES (%s, %s, %s, %s)
+            """, (
+                bill_id,
+                bill_data["net_amount"],
+                "Voice Bulk Automation",
+                f"VOICE-BULK-{bill_id}-{int(generated_at.timestamp())}"
+            ))
+
             results.append(bill_data)
         
         conn.commit()

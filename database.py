@@ -10,23 +10,36 @@ from dotenv import load_dotenv
 # Load environment variables from .env
 load_dotenv()
 
+# Load environment variables
+DB_URL = os.getenv("DB_URL")
 DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "1508")
+DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "employee_billing")
 DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASS = os.getenv("DB_PASS", "Postgre")
+DB_PASS = os.getenv("DB_PASS", "")
 
 def get_connection():
     """Return a PostgreSQL connection."""
-    conn = psycopg2.connect(
+    if DB_URL:
+        # For Render URLs, psycopg2 connects directly using the string.
+        # Adding sslmode=require as it is typically required for Render.
+        if "sslmode" not in DB_URL:
+            # Append if not there
+            sep = "&" if "?" in DB_URL else "?"
+            url = f"{DB_URL}{sep}sslmode=require"
+        else:
+            url = DB_URL
+        return psycopg2.connect(url, cursor_factory=RealDictCursor)
+    
+    return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASS,
+        sslmode="require",
         cursor_factory=RealDictCursor
     )
-    return conn
 
 def init_db():
     """Initialize PostgreSQL tables and seed sample employees."""
