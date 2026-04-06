@@ -23,43 +23,30 @@ else:
     import warnings
     warnings.warn("GROQ_API_KEY is not set. Voice AI features will be disabled.")
 
-SYSTEM_PROMPT = """You are an AI assistant for a Payroll & Employee Billing System.
-Your job is to understand user commands and convert them into structured JSON actions.
+SYSTEM_PROMPT = """You are an elite Payroll & HR Assistant. 
+Your goal is to provide 100% accurate, specific, and professional feedback.
 
 ---
-🎯 IMPORTANT RULES:
-1. Identify intent (action type).
-2. Extract data (employee_name, month, bonus, etc.).
-3. UNIVERSAL SCOPE: If user mentions "all employees", "everyone", or "entire company":
-   - NEVER set "employee_name": "all employees".
-   - Set "scope": "all" and "action": "generate_bulk_bills".
-4. Return ONLY valid JSON (no explanation).
-5. If unclear, return {"action": "unknown"}.
----
+🎯 CORE PRINCIPLES:
+1. SPECIFIC ERRORS: Never say "Error" or "Not found". 
+   - If a company is missing: "I couldn't identify the company '{{input}}'. Did you mean one of these: {{suggestions}}?"
+   - If an employee is missing: "I found '{{input}}' in the database, but they are not registered under '{{active_company}}'. Did you want to switch companies?"
+2. MASTER CONTEXT: Use the 'MASTER LIST' below to help the user if they make a mistake.
+3. CONVERSATIONAL AID: Always provide a helpful "message" explaining exactly what you found or why you need clarification.
+4. JSON ONLY. Return ONLY valid JSON.
 
-📌 SUPPORTED ACTIONS:
-- generate_bill (single employee)
-- generate_bulk_bills (scope: all)
-- get_highest_salary
-- get_lowest_attendance
-- get_absent_list (min_absent_days)
-- get_total_salary (month)
-- get_avg_attendance
-- get_total_deductions (month)
-- get_bills_by_time (range/month)
-- download_bill (employee_name)
-- send_email (employee_name)
+📌 MASTER LIST (Reference only):
+Companies: {all_companies}
+Employees in Current Company: {emp_names}
 
 ---
-📊 EXAMPLES:
-User: "Generate salary for everyone this month"
-Response: {"action": "generate_bulk_bills", "scope": "all", "month": "2026-03"}
-
-User: "Generate bill for Arun with 5000 bonus"
-Response: {"action": "generate_bill", "employee_name": "Arun", "bonus": 5000}
-
-User: "List employees with more than 3 absents"
-Response: {"action": "get_absent_list", "min_absent_days": 3}
+📊 RESPONSE FORMAT:
+{
+  "action": "generate_bill" | "generate_bulk_bills" | "unknown",
+  "employee_name": "...",
+  "message": "Polite, specific response with suggestions if needed",
+  "status": "success" | "clarification_needed"
+}
 """
 
 
@@ -114,23 +101,33 @@ def process_voice_command():
     if not voice_text or not company_id:
         return jsonify({"error": "text and company_id are required"}), 400
 
-    # Fetch employee names for THIS company to give context to the AI
+    # Fetch current company name
     conn = get_connection()
     cur = conn.cursor()
+    cur.execute("SELECT name FROM company WHERE id = %s", (company_id,))
+    co_row = cur.fetchone()
+    company_name = co_row["name"] if co_row else "this company"
+
+    # Fetch ALL company names for suggestibility
+    cur.execute("SELECT name FROM company")
+    all_companies = [r["name"] for r in cur.fetchall()]
+
+    # Fetch employee names for THIS company
     cur.execute("SELECT name FROM employee WHERE company_id = %s", (company_id,))
     emp_names = [row["name"] for row in cur.fetchall()]
     cur.close()
     conn.close()
 
-    if not client:
-        return jsonify({"error": "Voice AI features are currently disabled. Please contact the administrator to set the GROQ_API_KEY environment variable."}), 503
-
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + f"\n\nVALID EMPLOYEES: {', '.join(emp_names)}"},
-                {"role": "user", "content": f'Today\'s date is {date.today()}. Parse this command: "{voice_text}"'}
+                {"role": "system", "content": SYSTEM_PROMPT.format(
+                    company_name=company_name, 
+                    all_companies=", ".join(all_companies),
+                    emp_names=", ".join(emp_names)
+                )},
+                {"role": "user", "content": f'Today\'s date is {date.today()}. Active Profile: {company_name}. User says: "{voice_text}"'}
             ],
             temperature=0.0,
             response_format={ "type": "json_object" }
@@ -140,21 +137,26 @@ def process_voice_command():
         return jsonify({"error": f"AI Parsing failed: {str(e)}"}), 500
 
     action = parsed.get("action", "unknown")
+    ai_message = parsed.get("message", "I've understood your command and I'm processing it now.")
 
     if action == "unknown":
-        return jsonify({"error": "Command not understood", "parsed": parsed}), 400
+        return jsonify({
+            "message": ai_message, 
+            "error": "I wasn't able to map that to a specific action. Could you try rephrasing?",
+            "parsed": parsed
+        }), 400
 
     if action == "generate_bill":
-        return handle_generate_bill(parsed, voice_text, company_id)
+        return handle_generate_bill(parsed, voice_text, company_id, ai_message)
     elif action == "generate_bulk_bills":
-        return handle_generate_bulk(parsed, voice_text, company_id)
+        return handle_generate_bulk(parsed, voice_text, company_id, ai_message)
     elif action.startswith("get_"):
-        return handle_stats_query(action, parsed, voice_text, company_id)
+        return handle_stats_query(action, parsed, voice_text, company_id, ai_message)
     else:
         return jsonify({"message": f"Action '{action}' recognized but not yet fully implemented.", "parsed": parsed})
 
 
-def handle_generate_bill(parsed, voice_text, company_id):
+def handle_generate_bill(parsed, voice_text, company_id, ai_message):
     name = parsed.get("employee_name")
     if not name:
         return jsonify({"error": "Employee name missing"}), 400
@@ -211,6 +213,7 @@ def handle_generate_bill(parsed, voice_text, company_id):
 
     return jsonify({
         **bill_data,
+        "message": ai_message,
         "bill_id": bill_id,
         "company_id": company_id,
         "generated_at": generated_at,
@@ -220,7 +223,7 @@ def handle_generate_bill(parsed, voice_text, company_id):
     }), 201
 
 
-def handle_generate_bulk(parsed, voice_text, company_id):
+def handle_generate_bulk(parsed, voice_text, company_id, ai_message):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT * FROM employee WHERE company_id = %s", (company_id,))
@@ -274,7 +277,7 @@ def handle_generate_bulk(parsed, voice_text, company_id):
     conn.close()
 
     return jsonify({
-        "message": f"Successfully generated bills for {len(results)} employees.",
+        "message": ai_message,
         "count": len(results),
         "type": "bulk",
         "parsed_command": parsed,
@@ -282,7 +285,7 @@ def handle_generate_bulk(parsed, voice_text, company_id):
     })
 
 
-def handle_stats_query(action, parsed, voice_text, company_id):
+def handle_stats_query(action, parsed, voice_text, company_id, ai_message):
     conn = get_connection()
     cur = conn.cursor()
     data = None
@@ -316,6 +319,7 @@ def handle_stats_query(action, parsed, voice_text, company_id):
 
     return jsonify({
         "data": data,
+        "message": ai_message,
         "type": res_type,
         "action": action,
         "parsed_command": parsed,
