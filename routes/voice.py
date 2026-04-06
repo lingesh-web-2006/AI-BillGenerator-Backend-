@@ -98,8 +98,18 @@ def fuzzy_find_employee(name: str, company_id: int):
 @voice_bp.route("/process", methods=["POST"])
 def process_voice_command():
     data = request.get_json()
-    voice_text = data.get("text", "").strip()
+    raw_text = data.get("text", "")
     company_id = data.get("company_id")
+
+    # Resilience: Ensure raw_text is a string
+    if isinstance(raw_text, dict):
+        # Fallback if frontend sends nested object
+        voice_text = raw_text.get("text", "").strip()
+        if not company_id: company_id = raw_text.get("company_id")
+    elif isinstance(raw_text, str):
+        voice_text = raw_text.strip()
+    else:
+        voice_text = str(raw_text).strip()
 
     if not voice_text or not company_id:
         return jsonify({"error": "text and company_id are required"}), 400
