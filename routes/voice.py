@@ -23,30 +23,51 @@ else:
     import warnings
     warnings.warn("GROQ_API_KEY is not set. Voice AI features will be disabled.")
 
-SYSTEM_PROMPT = """You are an elite Payroll & HR Assistant. 
-Your goal is to provide 100% accurate, specific, and professional feedback.
+SYSTEM_PROMPT = """\
+You are an elite Payroll & HR AI Assistant.
+You convert natural language payroll commands into structured JSON.
 
 ---
-🎯 CORE PRINCIPLES:
-1. SPECIFIC ERRORS: Never say "Error" or "Not found". 
-   - If a company is missing: "I couldn't identify the company '{{input}}'. Did you mean one of these: {{suggestions}}?"
-   - If an employee is missing: "I found '{{input}}' in the database, but they are not registered under '{{active_company}}'. Did you want to switch companies?"
-2. MASTER CONTEXT: Use the 'MASTER LIST' below to help the user if they make a mistake.
-3. CONVERSATIONAL AID: Always provide a helpful "message" explaining exactly what you found or why you need clarification.
-4. JSON ONLY. Return ONLY valid JSON.
-
-📌 MASTER LIST (Reference only):
-Companies: {all_companies}
-Employees in Current Company: {emp_names}
+CORE RULES:
+1. ALWAYS include a "message" field with a polite, professional, natural-language response.
+2. NEVER say generic "Error" or "Not found". Be specific:
+   - Unknown employee: "I couldn't find an employee named '[name]' under this company. Did you mean one of: {emp_names}?"
+   - Unknown company: "The company mentioned isn't in my records. Registered companies are: {all_companies}."
+3. If command is unclear, set action=unknown and explain clearly in "message".
+4. Return ONLY valid JSON. No markdown, no extra text.
 
 ---
-📊 RESPONSE FORMAT:
-{
-  "action": "generate_bill" | "generate_bulk_bills" | "unknown",
-  "employee_name": "...",
-  "message": "Polite, specific response with suggestions if needed",
-  "status": "success" | "clarification_needed"
-}
+SUPPORTED ACTIONS:
+- generate_bill          (fields: employee_name, month?, bonus?, notes?)
+- generate_bulk_bills    (fields: month?, bonus?)
+- get_highest_salary
+- get_lowest_attendance
+- get_absent_list        (fields: min_absent_days)
+- get_total_salary       (fields: month)
+- get_avg_attendance
+- get_total_deductions   (fields: month)
+- unknown
+
+---
+EXAMPLE OUTPUTS (always include the message field):
+
+Command: "Generate bill for Arun with 5000 bonus"
+Output: {{"action": "generate_bill", "employee_name": "Arun", "bonus": 5000, "message": "I'm generating the bill for Arun and including the 5000 bonus as requested."}}
+
+Command: "Generate salary for everyone this month"
+Output: {{"action": "generate_bulk_bills", "scope": "all", "month": "2026-04", "message": "Processing the April 2026 payroll for all employees."}}
+
+Command: "Who has the highest salary?"
+Output: {{"action": "get_highest_salary", "message": "Looking up the highest-paid employee in your company now."}}
+
+Command: "List employees with more than 3 absents"
+Output: {{"action": "get_absent_list", "min_absent_days": 3, "message": "Fetching the list of employees with more than 3 absences."}}
+
+Command: "Create Zoho company bill"
+Output: {{"action": "unknown", "message": "I couldn't find an employee named 'Zoho' in this company. The registered employees are: {emp_names}. Could you please clarify?"}}
+
+Active Company Roster (for reference): {emp_names}
+All Registered Companies: {all_companies}
 """
 
 
@@ -118,23 +139,33 @@ def process_voice_command():
     cur.close()
     conn.close()
 
+    if not client:
+        return jsonify({"message": "The Voice AI is currently offline. Please set the GROQ_API_KEY environment variable in your Render dashboard and redeploy."}), 503
+
+    try:
+        prompt = SYSTEM_PROMPT.format(
+            all_companies=", ".join(all_companies) if all_companies else "None registered",
+            emp_names=", ".join(emp_names) if emp_names else "No employees found"
+        )
+    except KeyError as e:
+        return jsonify({"error": f"Prompt template error: {e}"}), 500
+
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT.format(
-                    company_name=company_name, 
-                    all_companies=", ".join(all_companies),
-                    emp_names=", ".join(emp_names)
-                )},
-                {"role": "user", "content": f'Today\'s date is {date.today()}. Active Profile: {company_name}. User says: "{voice_text}"'}
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": f'Today: {date.today()}. Active Company: {company_name}. User says: "{voice_text}"'}
             ],
             temperature=0.0,
-            response_format={ "type": "json_object" }
+            response_format={"type": "json_object"}
         )
-        parsed = json.loads(response.choices[0].message.content)
+        raw = response.choices[0].message.content
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"The AI returned an unexpected format. Please try rephrasing your command."}), 500
     except Exception as e:
-        return jsonify({"error": f"AI Parsing failed: {str(e)}"}), 500
+        return jsonify({"error": f"AI service error: {str(e)}"}), 500
 
     action = parsed.get("action", "unknown")
     ai_message = parsed.get("message", "I've understood your command and I'm processing it now.")
