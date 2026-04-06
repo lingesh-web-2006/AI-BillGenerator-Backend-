@@ -34,6 +34,8 @@ INTELLIGENCE RULES:
 3. CONTEXTUAL AWARENESS: Use the provided roster and company list to disambiguate requests.
 4. ERROR HANDLING: If a directive is logically inconsistent or the target is missing, state the specific deficiency and suggest the closest valid alternative from the records.
 5. FORMAT: Return ONLY valid JSON.
+6. DATE FORMATTING: Always format months/dates as 'YYYY-MM' (e.g., "2026-04"). NEVER return raw month names like "April".
+7. SQUISHED WORDS & MISTRANSCRIPTIONS: Speech-to-text might squish the action and name together (e.g., "Generate Lingeshwill" instead of "Generate Lingesh bill"). Detect the employee name ("Lingesh") from the roster and infer the action ("generate_bill").
 
 ---
 SYSTEM PARAMETERS:
@@ -72,12 +74,13 @@ def fuzzy_find_employee(name: str, company_id: int):
     name_map = {e["name"]: dict(e) for e in employees}
     names = list(name_map.keys())
 
-    # Use fuzzywuzzy to find best match
+    # Use fuzzywuzzy to find best match (WRatio partial string matching)
     match_result = process.extractOne(name, names)
     if not match_result: return None
     match, score = match_result[0], match_result[1]
 
-    if score >= 70:
+    # Lowered threshold to 55 to be more forgiving of "squished" words (e.g. Lingeshwill -> Lingesh)
+    if score >= 55:
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("SELECT * FROM employee WHERE id = %s", (name_map[match]["id"],))
@@ -183,7 +186,11 @@ def handle_generate_bill(parsed, voice_text, company_id, ai_message):
         return jsonify({"error": f"Employee '{name}' not found in this company."}), 404
 
     bill_date = parsed.get("month", str(date.today()))
-    if len(bill_date) == 7: bill_date += "-01"
+    if len(bill_date) == 7 and "-" in bill_date: 
+        bill_date += "-01"
+    elif len(bill_date) != 10 or "-" not in bill_date:
+        # Fallback if AI fails to return YYYY-MM or YYYY-MM-DD
+        bill_date = str(date.today())
 
     notes = parsed.get("notes", "")
     bonus = parsed.get("bonus", 0)
@@ -248,7 +255,10 @@ def handle_generate_bulk(parsed, voice_text, company_id, ai_message):
     
     results = []
     bill_date = parsed.get("month", str(date.today()))
-    if len(bill_date) == 7: bill_date += "-01"
+    if len(bill_date) == 7 and "-" in bill_date: 
+        bill_date += "-01"
+    elif len(bill_date) != 10 or "-" not in bill_date:
+        bill_date = str(date.today())
     
     bonus = parsed.get("bonus", 0)
 
