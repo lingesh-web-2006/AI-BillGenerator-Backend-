@@ -86,9 +86,16 @@ def init_db():
             INSERT INTO company (name, logo_url, address, gst_number, phone, template_name)
             VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, ("Default Corp", "https://via.placeholder.com/150", "123 Business Rd, Tech City", "27AAAAA0000A1Z5", "+91 98765 43210", "Modern"))
+        """, ("vips Tech", "https://via.placeholder.com/150", "redhills chennai 52", "27AAAAA0000A1Z5", "+91 98765 43210", "Modern"))
         default_company_id = cursor.fetchone()["id"]
     else:
+        # Update existing "Default Corp" if it exists
+        cursor.execute("""
+            UPDATE company 
+            SET name = %s, address = %s 
+            WHERE name = 'Default Corp' OR name = 'DEFAULT CORP'
+        """, ("vips Tech", "redhills chennai 52"))
+        
         cursor.execute("SELECT id FROM company LIMIT 1")
         default_company_id = cursor.fetchone()["id"]
 
