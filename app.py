@@ -16,6 +16,7 @@ from routes.employees import employees_bp
 from routes.bills import bills_bp
 from routes.voice import voice_bp
 from routes.auth import auth_bp
+from routes.companies import companies_bp
 
 def create_app():
     app = Flask(__name__)
@@ -36,6 +37,7 @@ def create_app():
     app.register_blueprint(bills_bp, url_prefix="/api/bills")
     app.register_blueprint(voice_bp, url_prefix="/api/voice")
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
+    app.register_blueprint(companies_bp, url_prefix="/api/companies")
 
     @app.route("/api/health")
     def health():

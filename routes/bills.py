@@ -47,15 +47,16 @@ def bill_to_dict(row) -> dict:
 def generate_bill():
     """
     Generate a bill for an employee.
-    Expects JSON: { "employee_id": int, "bill_date": "YYYY-MM-DD", "notes": "" }
+    Expects JSON: { "employee_id": int, "company_id": int, "bill_date": "YYYY-MM-DD", "notes": "" }
     """
     data = request.get_json()
-    emp_id    = data.get("employee_id")
-    bill_date = data.get("bill_date", str(date.today()))
-    notes     = data.get("notes", "")
+    emp_id     = data.get("employee_id")
+    company_id = data.get("company_id")
+    bill_date  = data.get("bill_date", str(date.today()))
+    notes      = data.get("notes", "")
 
-    if not emp_id:
-        return jsonify({"error": "employee_id is required"}), 400
+    if not emp_id or not company_id:
+        return jsonify({"error": "employee_id and company_id are required"}), 400
 
     conn = get_connection()
     cur = conn.cursor()
@@ -71,12 +72,13 @@ def generate_bill():
 
     try:
         cur.execute("""
-            INSERT INTO bill (employee_id, employee_name, amount, working_days, present_days,
+            INSERT INTO bill (employee_id, company_id, employee_name, amount, working_days, present_days,
                               absent_days, deduction, notes, bill_date, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
             RETURNING id, generated_at
         """, (
             bill_data["employee_id"],
+            company_id,
             bill_data["employee_name"],
             bill_data["net_amount"],
             bill_data["working_days"],
@@ -114,18 +116,21 @@ def generate_bill():
     return jsonify({
         **bill_data,
         "bill_id": bill_id,
+        "company_id": company_id,
         "generated_at": generated_at,
     }), 201
 
 
 @bills_bp.route("/", methods=["GET"])
 def get_all_bills():
-    """Fetch all bills with employee details, newest first."""
+    """Fetch all bills with employee details, optionally filtered by company."""
+    company_id = request.args.get("company_id")
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    
+    query = """
         SELECT b.id, b.amount, b.working_days, b.present_days, b.absent_days,
-               b.deduction, b.notes, b.bill_date, b.status, b.generated_at,
+               b.deduction, b.notes, b.bill_date, b.status, b.generated_at, b.company_id,
                e.id   AS employee_id,
                e.name AS employee_name,
                e.email,
@@ -133,8 +138,15 @@ def get_all_bills():
                e.monthly_salary
         FROM bill b
         JOIN employee e ON b.employee_id = e.id
-        ORDER BY b.generated_at DESC
-    """)
+    """
+    params = []
+    if company_id:
+        query += " WHERE b.company_id = %s"
+        params.append(company_id)
+        
+    query += " ORDER BY b.generated_at DESC"
+    
+    cur.execute(query, params)
     rows = cur.fetchall()
     cur.close()
     conn.close()

@@ -15,15 +15,23 @@ def employee_to_dict(row):
 
 @employees_bp.route("/", methods=["GET"])
 def get_all_employees():
-    """Fetch all employees with their attendance details."""
+    """Fetch all employees, optionally filtered by company."""
+    company_id = request.args.get("company_id")
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    
+    query = """
         SELECT id, name, email, designation, monthly_salary,
-               attendance_present, attendance_absent, working_days, created_at
+               attendance_present, attendance_absent, working_days, created_at, company_id
         FROM employee
-        ORDER BY name ASC
-    """)
+    """
+    params = []
+    if company_id:
+        query += " WHERE company_id = %s"
+        params.append(company_id)
+    
+    query += " ORDER BY name ASC"
+    cur.execute(query, params)
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -51,17 +59,17 @@ def get_employee(emp_id):
 def create_employee():
     """Add a new employee."""
     data = request.get_json()
-    required = ["name", "email", "monthly_salary"]
+    required = ["name", "email", "monthly_salary", "company_id"]
     if not all(k in data for k in required):
-        return jsonify({"error": "Missing required fields: name, email, monthly_salary"}), 400
+        return jsonify({"error": "Missing required fields: name, email, monthly_salary, company_id"}), 400
 
     conn = get_connection()
     cur = conn.cursor()
     try:
         cur.execute("""
             INSERT INTO employee (name, email, designation, monthly_salary,
-                                  attendance_present, attendance_absent, working_days)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                  attendance_present, attendance_absent, working_days, company_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             data["name"],
@@ -71,6 +79,7 @@ def create_employee():
             data.get("attendance_present", 0),
             data.get("attendance_absent", 0),
             data.get("working_days", 30),
+            data["company_id"],
         ))
         new_id = cur.fetchone()["id"]
         conn.commit()

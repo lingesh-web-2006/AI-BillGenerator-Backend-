@@ -63,11 +63,11 @@ Response: {"action": "get_absent_list", "min_absent_days": 3}
 """
 
 
-def fuzzy_find_employee(name: str):
-    """Find employee using fuzzy matching (80% threshold)."""
+def fuzzy_find_employee(name: str, company_id: int):
+    """Find employee in a specific company using fuzzy matching."""
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, name FROM employee")
+    cur.execute("SELECT id, name FROM employee WHERE company_id = %s", (company_id,))
     employees = cur.fetchall()
     cur.close()
     conn.close()
@@ -79,10 +79,11 @@ def fuzzy_find_employee(name: str):
     names = list(name_map.keys())
 
     # Use fuzzywuzzy to find best match
-    match, score = process.extractOne(name, names)
+    match_result = process.extractOne(name, names)
+    if not match_result: return None
+    match, score = match_result[0], match_result[1]
 
     if score >= 70:
-        # Fetch full details for the matched name
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("SELECT * FROM employee WHERE id = %s", (name_map[match]["id"],))
@@ -98,14 +99,15 @@ def fuzzy_find_employee(name: str):
 def process_voice_command():
     data = request.get_json()
     voice_text = data.get("text", "").strip()
+    company_id = data.get("company_id")
 
-    if not voice_text:
-        return jsonify({"error": "No voice text provided"}), 400
+    if not voice_text or not company_id:
+        return jsonify({"error": "text and company_id are required"}), 400
 
-    # Fetch employee names to give context to the AI
+    # Fetch employee names for THIS company to give context to the AI
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT name FROM employee")
+    cur.execute("SELECT name FROM employee WHERE company_id = %s", (company_id,))
     emp_names = [row["name"] for row in cur.fetchall()]
     cur.close()
     conn.close()
@@ -133,23 +135,23 @@ def process_voice_command():
         return jsonify({"error": "Command not understood", "parsed": parsed}), 400
 
     if action == "generate_bill":
-        return handle_generate_bill(parsed, voice_text)
+        return handle_generate_bill(parsed, voice_text, company_id)
     elif action == "generate_bulk_bills":
-        return handle_generate_bulk(parsed, voice_text)
+        return handle_generate_bulk(parsed, voice_text, company_id)
     elif action.startswith("get_"):
-        return handle_stats_query(action, parsed, voice_text)
+        return handle_stats_query(action, parsed, voice_text, company_id)
     else:
         return jsonify({"message": f"Action '{action}' recognized but not yet fully implemented.", "parsed": parsed})
 
 
-def handle_generate_bill(parsed, voice_text):
+def handle_generate_bill(parsed, voice_text, company_id):
     name = parsed.get("employee_name")
     if not name:
         return jsonify({"error": "Employee name missing"}), 400
 
-    emp = fuzzy_find_employee(name)
+    emp = fuzzy_find_employee(name, company_id)
     if not emp:
-        return jsonify({"error": f"Employee '{name}' not found (tried fuzzy match)"}), 404
+        return jsonify({"error": f"Employee '{name}' not found in this company."}), 404
 
     bill_date = parsed.get("month", str(date.today()))
     if len(bill_date) == 7: bill_date += "-01"
@@ -165,11 +167,11 @@ def handle_generate_bill(parsed, voice_text):
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT INTO bill (employee_id, employee_name, amount, working_days, present_days,
+            INSERT INTO bill (employee_id, company_id, employee_name, amount, working_days, present_days,
                               absent_days, deduction, notes, bill_date, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
             RETURNING id, generated_at
-        """, (emp["id"], emp["name"], bill_data["net_amount"], bill_data["working_days"],
+        """, (emp["id"], company_id, emp["name"], bill_data["net_amount"], bill_data["working_days"],
               bill_data["present_days"], bill_data["absent_days"], 
               bill_data["deduction"], bill_data["notes"], bill_date))
         result = cur.fetchone()
@@ -200,6 +202,7 @@ def handle_generate_bill(parsed, voice_text):
     return jsonify({
         **bill_data,
         "bill_id": bill_id,
+        "company_id": company_id,
         "generated_at": generated_at,
         "parsed_command": parsed,
         "voice_text": voice_text,
@@ -207,10 +210,10 @@ def handle_generate_bill(parsed, voice_text):
     }), 201
 
 
-def handle_generate_bulk(parsed, voice_text):
+def handle_generate_bulk(parsed, voice_text, company_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT * FROM employee")
+    cur.execute("SELECT * FROM employee WHERE company_id = %s", (company_id,))
     employees = cur.fetchall()
     
     results = []
@@ -225,11 +228,11 @@ def handle_generate_bulk(parsed, voice_text):
             bill_data["net_amount"] += bonus
             
             cur.execute("""
-                INSERT INTO bill (employee_id, employee_name, amount, working_days, present_days,
+                INSERT INTO bill (employee_id, company_id, employee_name, amount, working_days, present_days,
                                   absent_days, deduction, notes, bill_date, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
                 RETURNING id, generated_at
-            """, (emp["id"], emp["name"], bill_data["net_amount"], bill_data["working_days"],
+            """, (emp["id"], company_id, emp["name"], bill_data["net_amount"], bill_data["working_days"],
                   bill_data["present_days"], bill_data["absent_days"], 
                   bill_data["deduction"], f"Bulk generation. Bonus: {bonus}", bill_date))
             
@@ -237,7 +240,7 @@ def handle_generate_bulk(parsed, voice_text):
             bill_id = res["id"]
             generated_at = res["generated_at"]
 
-            # --- Automatic Transaction Logging for each bulk slip ---
+            # --- Automatic Transaction Logging ---
             cur.execute("""
                 INSERT INTO transaction_log (bill_id, amount, payment_method, transaction_ref)
                 VALUES (%s, %s, %s, %s)
@@ -269,33 +272,32 @@ def handle_generate_bulk(parsed, voice_text):
     })
 
 
-def handle_stats_query(action, parsed, voice_text):
+def handle_stats_query(action, parsed, voice_text, company_id):
     conn = get_connection()
     cur = conn.cursor()
     data = None
     res_type = "stat"
 
     if action == "get_highest_salary":
-        cur.execute("SELECT * FROM employee ORDER BY monthly_salary DESC LIMIT 1")
+        cur.execute("SELECT * FROM employee WHERE company_id = %s ORDER BY monthly_salary DESC LIMIT 1", (company_id,))
         row = cur.fetchone()
         data = dict(row) if row else None
     
     elif action == "get_lowest_attendance":
-        cur.execute("SELECT * FROM employee ORDER BY (attendance_present * 1.0 / working_days) ASC LIMIT 1")
+        cur.execute("SELECT * FROM employee WHERE company_id = %s ORDER BY (attendance_present * 1.0 / working_days) ASC LIMIT 1", (company_id,))
         row = cur.fetchone()
         data = dict(row) if row else None
 
     elif action == "get_absent_list":
         min_days = parsed.get("min_absent_days", 0)
-        cur.execute("SELECT * FROM employee WHERE attendance_absent >= %s", (min_days,))
+        cur.execute("SELECT * FROM employee WHERE company_id = %s AND attendance_absent >= %s", (company_id, min_days))
         rows = cur.fetchall()
         data = [dict(r) for r in rows]
         res_type = "list"
 
     elif action == "get_total_salary":
         month = parsed.get("month", "")
-        # Use Postgres compatible cast for bill_date if it's a DATE type
-        cur.execute("SELECT SUM(amount) as total FROM bill WHERE CAST(bill_date AS TEXT) LIKE %s", (f"{month}%",))
+        cur.execute("SELECT SUM(amount) as total FROM bill WHERE company_id = %s AND CAST(bill_date AS TEXT) LIKE %s", (company_id, f"{month}%",))
         row = cur.fetchone()
         data = {"total": float(row["total"] or 0), "month": month}
 
