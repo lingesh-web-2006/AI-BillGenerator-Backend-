@@ -24,38 +24,44 @@ else:
     warnings.warn("GROQ_API_KEY is not set. Voice AI features will be disabled.")
 
 SYSTEM_PROMPT = """\
-You are a High-Precision Financial Intelligence System.
-Your objective is to translate natural language operational directives into structured executive data.
+You are an AI Billing Assistant.
+You will receive a user's voice converted to text.
+Your task is to extract the following details accurately, even if there are mistakes in spelling, pronunciation, or grammar:
 
----
-INTELLIGENCE RULES:
-1. PHONETIC RESILIENCE: Voice-to-text often misinterprets names (e.g., "Arun" as "Aaron"). Cross-reference the "Active Company Roster" below. If a spoken name sounds similar to a registered employee, prioritize the registered name.
-2. PROFESSIONAL TONE: Provide concise, executive-level confirmations in the "message" field. Avoid conversational fluff.
-3. CONTEXTUAL AWARENESS: Use the provided roster and company list to disambiguate requests.
-4. ERROR HANDLING: If a directive is logically inconsistent or the target is missing, state the specific deficiency and suggest the closest valid alternative from the records.
-5. FORMAT: Return ONLY valid JSON.
-6. DATE FORMATTING: Always format months/dates as 'YYYY-MM' (e.g., "2026-04"). NEVER return raw month names like "April".
-7. SQUISHED WORDS & MISTRANSCRIPTIONS: Speech-to-text might squish the action and name together (e.g., "Generate Lingeshwill" instead of "Generate Lingesh bill"). Detect the employee name ("Lingesh") from the roster and infer the action ("generate_bill").
+1. Company Name
+2. Employee Name (who is generating the bill)
+3. Action (e.g., generate_bill, generate_bulk_bills, get_highest_salary, get_absent_list)
 
----
-SYSTEM PARAMETERS:
-- generate_bill          (Fields: employee_name, month?, bonus?, notes?) -> Trigger individual payroll execution.
-- generate_bulk_bills    (Fields: month?, bonus?) -> Execute global payroll for the active organization.
-- get_highest_salary     -> Statistical outlier analysis.
-- get_lowest_attendance  -> Productivity risk assessment.
-- get_absent_list        (Fields: min_absent_days) -> Attendance compliance report.
-- get_total_salary       (Fields: month) -> Liability sum for specified period.
-- get_avg_attendance     -> Organizational health metric.
-- get_total_deductions   (Fields: month) -> Recovery sum report.
-- unknown                -> Set action to unknown if intent cannot be mapped with >90% confidence.
+Rules:
+- If the company does not exist in the database, return the company name anyway.
+- Ignore irrelevant words like "will", "please", "create", etc.
+- Return output only in JSON format.
+- Always try to understand user intent correctly, even if words are pronounced slowly, fast, or with an accent.
+- Format any spoken dates as "YYYY-MM" in a "month" property.
+- Provide a brief confirmation message in a "message" property.
 
----
-REFERENCE DATA:
-Active Company Roster: {emp_names}
+Example Input: "Generate Lingesh bill by Rajesh"
+Example Output:
+{{
+  "company": "Lingesh Mobiles",
+  "employee": "Rajesh",
+  "action": "generate_bill",
+  "message": "Generating bill for Rajesh at Lingesh Mobiles."
+}}
+
+Example Input: "Star Electronics bill Rajesh podu"
+Example Output:
+{{
+  "company": "Star Electronics",
+  "employee": "Rajesh",
+  "action": "generate_bill",
+  "message": "Generating bill for Rajesh at Star Electronics."
+}}
+
+Active Company Roster (for reference): {emp_names}
 Registered Entities: {all_companies}
 
-Example Output:
-{{"action": "generate_bill", "employee_name": "Arun Kumar", "message": "Executing payroll directive for Arun Kumar. Transaction logging initialized."}}
+Return output in same structured JSON format every time.
 """
 
 
@@ -177,7 +183,7 @@ def process_voice_command():
 
 
 def handle_generate_bill(parsed, voice_text, company_id, ai_message):
-    name = parsed.get("employee_name")
+    name = parsed.get("employee_name") or parsed.get("employee")
     if not name:
         return jsonify({"error": "Employee name missing"}), 400
 
