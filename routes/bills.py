@@ -73,8 +73,8 @@ def generate_bill():
     try:
         cur.execute("""
             INSERT INTO bill (employee_id, company_id, employee_name, amount, working_days, present_days,
-                              absent_days, deduction, notes, bill_date, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+                              absent_days, deduction, notes, bill_date, status, bonus)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID', %s)
             RETURNING id, generated_at
         """, (
             bill_data["employee_id"],
@@ -87,6 +87,7 @@ def generate_bill():
             bill_data["deduction"],
             notes,
             bill_date,
+            0, # Default bonus to 0 for standard manual bill generation
         ))
         result = cur.fetchone()
         bill_id = result["id"]
@@ -130,7 +131,7 @@ def get_all_bills():
     
     query = """
         SELECT b.id, b.amount, b.working_days, b.present_days, b.absent_days,
-               b.deduction, b.notes, b.bill_date, b.status, b.generated_at, b.company_id,
+               b.deduction, b.notes, b.bill_date, b.status, b.generated_at, b.company_id, b.bonus,
                e.id   AS employee_id,
                e.name AS employee_name,
                e.email,

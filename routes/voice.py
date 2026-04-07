@@ -31,6 +31,8 @@ Your task is to extract the following details accurately, even if there are mist
 1. Company Name
 2. Employee Name (who is generating the bill)
 3. Action (e.g., generate_bill, generate_bulk_bills, get_highest_salary, get_absent_list)
+4. Bonus (number, optional, can be positive or negative)
+5. Work Description (string, optional - e.g. 'building the backend', 'designing the website', or whatever specific work was mentioned. If none mentioned, leave out)
 
 Rules:
 - If the company does not exist in the database, return the company name anyway.
@@ -46,7 +48,9 @@ Example Output:
   "company": "Lingesh Mobiles",
   "employee": "Rajesh",
   "action": "generate_bill",
-  "message": "Generating bill for Rajesh at Lingesh Mobiles."
+  "bonus": 2000,
+  "work_description": "repairing mobile screens",
+  "message": "Generating bill for Rajesh at Lingesh Mobiles with 2000 bonus."
 }}
 
 Example Input: "Star Electronics bill Rajesh podu"
@@ -198,24 +202,27 @@ def handle_generate_bill(parsed, voice_text, company_id, ai_message):
         # Fallback if AI fails to return YYYY-MM or YYYY-MM-DD
         bill_date = str(date.today())
 
-    notes = parsed.get("notes", "")
+    work_desc = parsed.get("work_description", "")
+    base_notes = parsed.get("notes", work_desc)
     bonus = parsed.get("bonus", 0)
 
-    bill_data = calculate_bill(emp, bill_date, notes)
+    bill_data = calculate_bill(emp, bill_date, base_notes)
     bill_data["net_amount"] += bonus
-    bill_data["notes"] = f"{notes} (Includes bonus: {bonus})" if bonus else notes
+    
+    # Just save the work description or notes cleanly.
+    bill_data["notes"] = base_notes
 
     conn = get_connection()
     cur = conn.cursor()
     try:
         cur.execute("""
             INSERT INTO bill (employee_id, company_id, employee_name, amount, working_days, present_days,
-                              absent_days, deduction, notes, bill_date, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+                              absent_days, deduction, notes, bill_date, status, bonus)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID', %s)
             RETURNING id, generated_at
         """, (emp["id"], company_id, emp["name"], bill_data["net_amount"], bill_data["working_days"],
               bill_data["present_days"], bill_data["absent_days"], 
-              bill_data["deduction"], bill_data["notes"], bill_date))
+              bill_data["deduction"], bill_data["notes"], bill_date, bonus))
         result = cur.fetchone()
         bill_id = result["id"]
         generated_at = result["generated_at"]
@@ -275,12 +282,12 @@ def handle_generate_bulk(parsed, voice_text, company_id, ai_message):
             
             cur.execute("""
                 INSERT INTO bill (employee_id, company_id, employee_name, amount, working_days, present_days,
-                                  absent_days, deduction, notes, bill_date, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID')
+                                  absent_days, deduction, notes, bill_date, status, bonus)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PAID', %s)
                 RETURNING id, generated_at
             """, (emp["id"], company_id, emp["name"], bill_data["net_amount"], bill_data["working_days"],
                   bill_data["present_days"], bill_data["absent_days"], 
-                  bill_data["deduction"], f"Bulk generation. Bonus: {bonus}", bill_date))
+                  bill_data["deduction"], f"Bulk generation. Bonus: {bonus}", bill_date, bonus))
             
             res = cur.fetchone()
             bill_id = res["id"]

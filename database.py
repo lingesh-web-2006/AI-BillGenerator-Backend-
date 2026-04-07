@@ -146,6 +146,8 @@ def init_db():
     # Ensure existing bills have the employee_name column
     cursor.execute("ALTER TABLE bill ADD COLUMN IF NOT EXISTS employee_name TEXT NOT NULL DEFAULT 'N/A'")
 
+    cursor.execute("ALTER TABLE bill ADD COLUMN IF NOT EXISTS bonus REAL NOT NULL DEFAULT 0")
+
     # --- Transaction Log table ---
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transaction_log (
